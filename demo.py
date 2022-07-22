@@ -8,7 +8,7 @@ import cv2
 
 def parser():
     parser = argparse.ArgumentParser(description="YOLO Object Detection")
-    parser.add_argument("--input", type=str, default="../0020.mp4",
+    parser.add_argument("--input", type=str, default="../../0001.mp4",
                         help="video source. If empty, uses webcam 0 stream")
     parser.add_argument("--out_filename", type=str, default="",
                         help="inference video name. Not saved if empty")
@@ -93,6 +93,15 @@ def det2trt(frame, detections):
         det_trt.append(det)
     return np.array(det_trt)
 
+def draw_boxes(detections, image, colors):
+    import cv2
+    for label, confidence, bbox in detections:
+        left, top, right, bottom = bbox2points(bbox)
+        cv2.rectangle(image, (left, top), (right, bottom), (0,0,0), 1)
+        cv2.putText(image, "{} [{:.2f}]".format(label, float(confidence)),
+                    (left, top - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                    (0,0,0), 2)
+    return image
 
 
 if __name__ =="__main__":
@@ -108,9 +117,7 @@ if __name__ =="__main__":
     darknet_height = darknet.network_height(network)
 
     #create instance of SORT
-    mot_tracker = Sort()
-    fig = plt.figure()
-    ax1 = fig.add_subplot(111, aspect='equal')
+    mot_tracker = Sort(max_age=30, min_hits=5, iou_threshold=0.5)
     colours = np.random.rand(32, 3)*255
 
     input_path = str2int(args.input)
@@ -121,6 +128,8 @@ if __name__ =="__main__":
     while cap.isOpened():
         ret, frame = cap.read()
         frame_num = frame_num+1
+        if frame_num > 882:
+            print(frame_num)
         if not ret:
             break
         frame_rgb = frame
@@ -131,11 +140,17 @@ if __name__ =="__main__":
         darknet.copy_image_from_bytes(img_for_detect, frame_resized.tobytes())
         prev_time = time.time()
         detections = darknet.detect_image(network, class_names, img_for_detect, thresh=args.thresh)
+        detections_adjusted = []
+        for label, confidence, bbox in detections:
+            bbox_adjusted = convert2original(frame, bbox)
+            detections_adjusted.append((str(label), confidence, bbox_adjusted))
+        image = draw_boxes(detections_adjusted, frame_rgb, class_colors)
         fps = int(1/(time.time() - prev_time))
         # print("FPS: {}".format(fps))
         # darknet.print_detections(detections, args.ext_output)
         darknet.free_image(img_for_detect)
-
+        if len(detections) >= 3:
+            print(len(detections))
         detections = det2trt(frame_rgb, detections)
         # update SORT
         track_bbs_ids = mot_tracker.update(detections)
@@ -144,13 +159,13 @@ if __name__ =="__main__":
         for d in track_bbs_ids:
             # print('%d,%d,%.2f,%.2f,%.2f,%.2f,1,-1,-1,-1'%(frame_num,d[4],d[0],d[1],d[2]-d[0],d[3]-d[1]))
             d = d.astype(np.int32)
-            cv2.rectangle(frame_rgb, (d[0],d[1]),(d[2],d[3]),colours[d[4]%32,:])
-            cv2.putText(frame_rgb, str(d[4]), (d[0],d[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.75, colours[d[4]%32,:], 2)
-            cv2.putText(frame_rgb, "frame_num:"+str(frame_num), (10,20), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0,255,0), 2)
-            cv2.putText(frame_rgb, "FPS:"+str(fps), (10,43), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0,255,0), 2)
+            cv2.rectangle(image, (d[0],d[1]),(d[2],d[3]),colours[d[4]%32,:])
+            cv2.putText(image, str(d[4]), (d[0],d[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.75, colours[d[4]%32,:], 2)
+            cv2.putText(image, "frame_num:"+str(frame_num), (10,20), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0,255,0), 2)
+            cv2.putText(image, "FPS:"+str(fps), (10,43), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0,255,0), 2)
             if d[4]>max_num:
                 max_num = d[4]
-        cv2.imshow("frame",frame_rgb)
+        cv2.imshow("frame",image)
         if cv2.waitKey(10) & 0xFF == 27:
             break
     print("max_num=", max_num)

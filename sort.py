@@ -128,8 +128,7 @@ class KalmanBoxTracker(object):
     # self.kf.Q[6,6] *= 1e8
     
     self.time_since_update = 0
-    self.id = KalmanBoxTracker.count
-    KalmanBoxTracker.count += 1
+    self.id = 0
     self.history = []
     self.hits = 0
     self.hit_streak = 0
@@ -141,7 +140,7 @@ class KalmanBoxTracker(object):
     """
     self.time_since_update = 0
     self.history = []
-    self.hits += 1
+    # self.hits += 1
     self.hit_streak += 1
     self.kf.update(convert_bbox_to_z(bbox))
 
@@ -154,8 +153,9 @@ class KalmanBoxTracker(object):
     self.kf.predict()
     # self.kf.update(self.kf.x[:4])
     self.age += 1
-    if(self.time_since_update>0):
-      self.hit_streak = 0
+    self.hits += 1
+    # if(self.time_since_update>0):
+    #   self.hit_streak = 0
     self.time_since_update += 1
     self.history.append(convert_x_to_bbox(self.kf.x))
     return self.history[-1]
@@ -181,7 +181,7 @@ def associate_detections_to_trackers(detections,trackers,iou_threshold):
   if min(iou_matrix.shape) > 0:
     a = (iou_matrix > iou_threshold).astype(np.int32)
     if a.sum(1).max() == 1 and a.sum(0).max() == 1:
-        matched_indices = np.stack(np.where(a), axis=1)
+      matched_indices = np.stack(np.where(a), axis=1)
     else:
       matched_indices = linear_assignment(-iou_matrix)
   else:
@@ -257,14 +257,22 @@ class Sort(object):
         self.trackers.append(trk)
     i = len(self.trackers)
     for trk in reversed(self.trackers):
-        d = trk.get_state()[0]
-        # if (trk.time_since_update < 1) and (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits):
-        if (trk.time_since_update < self.max_age) and (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits):
-          ret.append(np.concatenate((d,[trk.id+1])).reshape(1,-1)) # +1 as MOT benchmark requires positive
         i -= 1
         # remove dead tracklet
         if(trk.time_since_update > self.max_age):
           self.trackers.pop(i)
+          continue
+
+        d = trk.get_state()[0]
+        # if (trk.time_since_update < 1) and (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits):
+        # if trk.hit_streak >= self.min_hits:
+        if trk.hits == self.min_hits:
+          KalmanBoxTracker.count += 1
+          trk.id = KalmanBoxTracker.count
+          ret.append(np.concatenate((d,[trk.id])).reshape(1,-1)) # +1 as MOT benchmark requires positive
+        elif trk.hits > self.min_hits:
+          ret.append(np.concatenate((d,[trk.id])).reshape(1,-1))
+        
     if(len(ret)>0):
       return np.concatenate(ret)
     return np.empty((0,5))
