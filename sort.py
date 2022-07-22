@@ -73,9 +73,11 @@ def convert_bbox_to_z(bbox):
   h = bbox[3] - bbox[1]
   x = bbox[0] + w/2.
   y = bbox[1] + h/2.
-  s = w * h    #scale is just area
   r = w / float(h)
-  return np.array([x, y, s, r]).reshape((4, 1))
+  # s = w * h    #scale is just area
+  # r = w / float(h)
+  # return np.array([x, y, s, r]).reshape((4, 1))
+  return np.array([x, y, r, h]).reshape((4, 1))
 
 
 def convert_x_to_bbox(x,score=None):
@@ -83,8 +85,10 @@ def convert_x_to_bbox(x,score=None):
   Takes a bounding box in the centre form [x,y,s,r] and returns it in the form
     [x1,y1,x2,y2] where x1,y1 is the top left and x2,y2 is the bottom right
   """
-  w = np.sqrt(x[2] * x[3])
-  h = x[2] / w
+  # w = np.sqrt(x[2] * x[3])
+  # h = x[2] / w
+  w = x[2] * x[3]
+  h = x[3]
   if(score==None):
     return np.array([x[0]-w/2.,x[1]-h/2.,x[0]+w/2.,x[1]+h/2.]).reshape((1,4))
   else:
@@ -101,17 +105,28 @@ class KalmanBoxTracker(object):
     Initialises a tracker using initial bounding box.
     """
     #define constant velocity model
-    self.kf = KalmanFilter(dim_x=7, dim_z=4) 
-    self.kf.F = np.array([[1,0,0,0,1,0,0],[0,1,0,0,0,1,0],[0,0,1,0,0,0,1],[0,0,0,1,0,0,0],  [0,0,0,0,1,0,0],[0,0,0,0,0,1,0],[0,0,0,0,0,0,1]])
-    self.kf.H = np.array([[1,0,0,0,0,0,0],[0,1,0,0,0,0,0],[0,0,1,0,0,0,0],[0,0,0,1,0,0,0]])
+    self.kf = KalmanFilter(dim_x=8, dim_z=4) 
+    self.kf.x[:4] = convert_bbox_to_z(bbox)
+    self.kf.F = np.array([[1,0,0,0,1,0,0,0],[0,1,0,0,0,1,0,0],[0,0,1,0,0,0,1,0],[0,0,0,1,0,0,0,1],  [0,0,0,0,1,0,0,0],[0,0,0,0,0,1,0,0],[0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,1]])
+    self.kf.H = np.array([[1,0,0,0,0,0,0,0],[0,1,0,0,0,0,0,0],[0,0,1,0,0,0,0,0],[0,0,0,1,0,0,0,0]])
 
     self.kf.R[2:,2:] *= 10.
+    # self.kf.R *= pow(0.05*self.kf.x[3],2)
+    # self.kf.R[2,2] /= (pow(0.05*self.kf.x[3],2)*10)
     self.kf.P[4:,4:] *= 1000. #give high uncertainty to the unobservable initial velocities
     self.kf.P *= 10.
+    # self.kf.P[[0,1,3],[0,1,3]] *= pow(0.1*self.kf.x[3],2)
+    # self.kf.P[2,2] *= 1e-4
+    # self.kf.P[[4,5,7],[4,5,7]] *= pow(0.06*self.kf.x[3],2)
+    # self.kf.P[6,6] *= 1e-10
+
     self.kf.Q[-1,-1] *= 0.01
     self.kf.Q[4:,4:] *= 0.01
-
-    self.kf.x[:4] = convert_bbox_to_z(bbox)
+    # self.kf.Q[[0,1,3],[0,1,3]] *= pow(0.05*self.kf.x[3],2)
+    # self.kf.Q[2,2] *= 1e-2
+    # self.kf.Q[[4,5,7],[4,5,7]] *= pow(0.006*self.kf.x[3],2)
+    # self.kf.Q[6,6] *= 1e8
+    
     self.time_since_update = 0
     self.id = KalmanBoxTracker.count
     KalmanBoxTracker.count += 1
@@ -134,9 +149,10 @@ class KalmanBoxTracker(object):
     """
     Advances the state vector and returns the predicted bounding box estimate.
     """
-    if((self.kf.x[6]+self.kf.x[2])<=0):
-      self.kf.x[6] *= 0.0
+    # if((self.kf.x[6]+self.kf.x[2])<=0):
+    #   self.kf.x[6] *= 0.0
     self.kf.predict()
+    # self.kf.update(self.kf.x[:4])
     self.age += 1
     if(self.time_since_update>0):
       self.hit_streak = 0
@@ -151,7 +167,7 @@ class KalmanBoxTracker(object):
     return convert_x_to_bbox(self.kf.x)
 
 
-def associate_detections_to_trackers(detections,trackers,iou_threshold = 0.3):
+def associate_detections_to_trackers(detections,trackers,iou_threshold):
   """
   Assigns detections to tracked object (both represented as bounding boxes)
 
@@ -197,7 +213,7 @@ def associate_detections_to_trackers(detections,trackers,iou_threshold = 0.3):
 
 
 class Sort(object):
-  def __init__(self, max_age=1, min_hits=3, iou_threshold=0.3):
+  def __init__(self, max_age=60, min_hits=5, iou_threshold=0.5):
     """
     Sets key parameters for SORT
     """
@@ -242,7 +258,8 @@ class Sort(object):
     i = len(self.trackers)
     for trk in reversed(self.trackers):
         d = trk.get_state()[0]
-        if (trk.time_since_update < 1) and (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits):
+        # if (trk.time_since_update < 1) and (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits):
+        if (trk.time_since_update < self.max_age) and (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits):
           ret.append(np.concatenate((d,[trk.id+1])).reshape(1,-1)) # +1 as MOT benchmark requires positive
         i -= 1
         # remove dead tracklet
@@ -260,11 +277,11 @@ def parse_args():
     parser.add_argument("--phase", help="Subdirectory in seq_path.", type=str, default='train')
     parser.add_argument("--max_age", 
                         help="Maximum number of frames to keep alive a track without associated detections.", 
-                        type=int, default=1)
+                        type=int, default=600)
     parser.add_argument("--min_hits", 
                         help="Minimum number of associated detections before track is initialised.", 
-                        type=int, default=3)
-    parser.add_argument("--iou_threshold", help="Minimum IOU for match.", type=float, default=0.3)
+                        type=int, default=20)
+    parser.add_argument("--iou_threshold", help="Minimum IOU for match.", type=float, default=0.5)
     args = parser.parse_args()
     return args
 
