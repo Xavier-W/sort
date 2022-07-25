@@ -128,8 +128,8 @@ if __name__ =="__main__":
     while cap.isOpened():
         ret, frame = cap.read()
         frame_num = frame_num+1
-        if frame_num > 882:
-            print(frame_num)
+        # if frame_num > 882:
+        #     print(frame_num)
         if not ret:
             break
         frame_rgb = frame
@@ -149,8 +149,6 @@ if __name__ =="__main__":
         # print("FPS: {}".format(fps))
         # darknet.print_detections(detections, args.ext_output)
         darknet.free_image(img_for_detect)
-        if len(detections) >= 3:
-            print(len(detections))
         detections = det2trt(frame_rgb, detections)
         # update SORT
         track_bbs_ids = mot_tracker.update(detections)
